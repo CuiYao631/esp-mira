@@ -1,16 +1,15 @@
-// led.ino - LED 控制、动画和命令处理
+// led.ino - LED 控制、动画和命令处理（4 路独立 WS2812）
+
+// ---------- 各圈参数表 ----------
+static const int g_ringCounts[4] = { RGB1_COUNT, RGB2_COUNT, RGB3_COUNT, RGB4_COUNT };
+static const int g_ringOffsets[4] = { RGB1_OFFSET, RGB2_OFFSET, RGB3_OFFSET, RGB4_OFFSET };
 
 // ---------- LED 基础操作 ----------
 int mapGroupIndexToLed(int group, int idx) {
-  if (group == GROUP_OUTER) {
-    if (idx < 0 || idx >= OUTER_RING) return -1;
-    return idx;
-  }
-  if (group == GROUP_INNER) {
-    if (idx < 0 || idx >= INNER_RING) return -1;
-    return OUTER_RING + idx;
-  }
-  return -1;
+  if (group < 1 || group > 4) return -1;
+  int ring = group - 1;
+  if (idx < 0 || idx >= g_ringCounts[ring]) return -1;
+  return g_ringOffsets[ring] + idx;
 }
 
 void copyStageToActive() {
@@ -22,13 +21,18 @@ void clearActiveLeds() {
 }
 
 void renderActiveLeds() {
-  for (int i = 0; i < NUM_LEDS; i++) {
-    uint8_t r = (uint8_t)(((uint16_t)g_ledActive[i].r * g_ledActive[i].bri) / 255);
-    uint8_t g = (uint8_t)(((uint16_t)g_ledActive[i].g * g_ledActive[i].bri) / 255);
-    uint8_t b = (uint8_t)(((uint16_t)g_ledActive[i].b * g_ledActive[i].bri) / 255);
-    strip.setPixelColor(i, r, g, b);
+  for (int s = 0; s < NUM_STRIPS; s++) {
+    int offset = g_ringOffsets[s];
+    int count  = g_ringCounts[s];
+    for (int i = 0; i < count; i++) {
+      int gi = offset + i;
+      uint8_t r = (uint8_t)(((uint16_t)g_ledActive[gi].r * g_ledActive[gi].bri) / 255);
+      uint8_t g = (uint8_t)(((uint16_t)g_ledActive[gi].g * g_ledActive[gi].bri) / 255);
+      uint8_t b = (uint8_t)(((uint16_t)g_ledActive[gi].b * g_ledActive[gi].bri) / 255);
+      strips[s].setPixelColor(i, r, g, b);
+    }
+    strips[s].show();
   }
-  strip.show();
 }
 
 // ---------- 动画帧函数 ----------
@@ -42,7 +46,7 @@ static void animBreatheTick() {
   for (int i = 0; i < NUM_LEDS; i++) {
     if (g_anim.rainbow) {
       uint16_t hue = (uint16_t)((uint32_t)i * 65536 / NUM_LEDS);
-      uint32_t c = strip.gamma32(strip.ColorHSV(hue, 255, 255));
+      uint32_t c = strips[0].gamma32(strips[0].ColorHSV(hue, 255, 255));
       g_ledActive[i] = { (uint8_t)((c >> 16) & 0xFF),
                          (uint8_t)((c >>  8) & 0xFF),
                          (uint8_t)( c        & 0xFF), bri };
@@ -54,12 +58,12 @@ static void animBreatheTick() {
 }
 
 static void animWakeTick() {
-  if (g_anim.wkStep >= 2) { g_anim.mode = ANIM_NONE; return; }
+  if (g_anim.wkStep >= 4) { g_anim.mode = ANIM_NONE; return; }
 
-  bool isInner  = (g_anim.wkStep == 0);
-  int  start    = isInner ? OUTER_RING : 0;
-  int  count    = isInner ? INNER_RING : OUTER_RING;
-  int  ringSize = count;
+  // 从内圈（ring 3）到外圈（ring 0）依次亮起
+  int ring  = 3 - g_anim.wkStep;
+  int start = g_ringOffsets[ring];
+  int count = g_ringCounts[ring];
 
   uint8_t bri = (g_anim.wkTimer >= WAKE_FADE_TICKS)
                 ? g_anim.maxBri
@@ -68,8 +72,8 @@ static void animWakeTick() {
   for (int i = 0; i < count; i++) {
     int led = start + i;
     if (g_anim.rainbow) {
-      uint16_t hue = (uint16_t)((uint32_t)i * 65536 / ringSize);
-      uint32_t c = strip.gamma32(strip.ColorHSV(hue, 255, 255));
+      uint16_t hue = (uint16_t)((uint32_t)i * 65536 / count);
+      uint32_t c = strips[0].gamma32(strips[0].ColorHSV(hue, 255, 255));
       g_ledActive[led] = { (uint8_t)((c >> 16) & 0xFF),
                            (uint8_t)((c >>  8) & 0xFF),
                            (uint8_t)( c        & 0xFF), bri };
@@ -86,53 +90,33 @@ static void animWakeTick() {
 }
 
 static void animSpinTick() {
-  g_anim.outerPos += g_anim.outerDir * SPIN_SPEED_F;
-  if (g_anim.outerPos <  0)          g_anim.outerPos += OUTER_RING;
-  if (g_anim.outerPos >= OUTER_RING) g_anim.outerPos -= OUTER_RING;
+  for (int ring = 0; ring < 4; ring++) {
+    g_anim.spinPos[ring] += g_anim.spinDir[ring] * SPIN_SPEED_F;
+    int count = g_ringCounts[ring];
+    if (g_anim.spinPos[ring] <  0)     g_anim.spinPos[ring] += count;
+    if (g_anim.spinPos[ring] >= count) g_anim.spinPos[ring] -= count;
 
-  g_anim.innerPos += g_anim.innerDir * SPIN_SPEED_F;
-  if (g_anim.innerPos <  0)          g_anim.innerPos += INNER_RING;
-  if (g_anim.innerPos >= INNER_RING) g_anim.innerPos -= INNER_RING;
+    float fCnt = (float)count;
+    int offset = g_ringOffsets[ring];
 
-  const float fO = (float)OUTER_RING;
-  const float fI = (float)INNER_RING;
-
-  for (int i = 0; i < OUTER_RING; i++) {
-    float dist = (g_anim.outerDir > 0)
-                 ? fmodf(g_anim.outerPos - (float)i + fO, fO)
-                 : fmodf((float)i - g_anim.outerPos + fO, fO);
-    float t = (fO - 1.0f - dist) / (fO - 1.0f);
-    if (t < 0.0f) t = 0.0f;
-    uint8_t bri = (uint8_t)((float)g_anim.maxBri * t * t + 0.5f);
-    if (bri == 0) bri = 1;
-    if (g_anim.rainbow) {
-      uint16_t hue = (uint16_t)((uint32_t)i * 65536 / OUTER_RING);
-      uint32_t c = strip.gamma32(strip.ColorHSV(hue, 255, 255));
-      g_ledActive[i] = { (uint8_t)((c >> 16) & 0xFF),
-                         (uint8_t)((c >>  8) & 0xFF),
-                         (uint8_t)( c        & 0xFF), bri };
-    } else {
-      g_ledActive[i] = { g_anim.r, g_anim.g, g_anim.b, bri };
-    }
-  }
-
-  for (int i = 0; i < INNER_RING; i++) {
-    float dist = (g_anim.innerDir > 0)
-                 ? fmodf(g_anim.innerPos - (float)i + fI, fI)
-                 : fmodf((float)i - g_anim.innerPos + fI, fI);
-    float t = (fI - 1.0f - dist) / (fI - 1.0f);
-    if (t < 0.0f) t = 0.0f;
-    uint8_t bri = (uint8_t)((float)g_anim.maxBri * t * t + 0.5f);
-    if (bri == 0) bri = 1;
-    int led = OUTER_RING + i;
-    if (g_anim.rainbow) {
-      uint16_t hue = (uint16_t)((uint32_t)i * 65536 / INNER_RING);
-      uint32_t c = strip.gamma32(strip.ColorHSV(hue, 255, 255));
-      g_ledActive[led] = { (uint8_t)((c >> 16) & 0xFF),
-                           (uint8_t)((c >>  8) & 0xFF),
-                           (uint8_t)( c        & 0xFF), bri };
-    } else {
-      g_ledActive[led] = { g_anim.r, g_anim.g, g_anim.b, bri };
+    for (int i = 0; i < count; i++) {
+      float dist = (g_anim.spinDir[ring] > 0)
+                   ? fmodf(g_anim.spinPos[ring] - (float)i + fCnt, fCnt)
+                   : fmodf((float)i - g_anim.spinPos[ring] + fCnt, fCnt);
+      float t = (fCnt - 1.0f - dist) / (fCnt - 1.0f);
+      if (t < 0.0f) t = 0.0f;
+      uint8_t bri = (uint8_t)((float)g_anim.maxBri * t * t + 0.5f);
+      if (bri == 0) bri = 1;
+      int led = offset + i;
+      if (g_anim.rainbow) {
+        uint16_t hue = (uint16_t)((uint32_t)i * 65536 / count);
+        uint32_t c = strips[0].gamma32(strips[0].ColorHSV(hue, 255, 255));
+        g_ledActive[led] = { (uint8_t)((c >> 16) & 0xFF),
+                             (uint8_t)((c >>  8) & 0xFF),
+                             (uint8_t)( c        & 0xFF), bri };
+      } else {
+        g_ledActive[led] = { g_anim.r, g_anim.g, g_anim.b, bri };
+      }
     }
   }
   g_ledDirty = true;
@@ -149,9 +133,11 @@ void tickAnimation() {
 
 // ---------- LED 初始化（在 setup 中调用）----------
 void setupLED() {
-  strip.begin();
-  strip.setBrightness(255);
-  strip.show();
+  for (int s = 0; s < NUM_STRIPS; s++) {
+    strips[s].begin();
+    strips[s].setBrightness(255);
+    strips[s].show();
+  }
   for (int i = 0; i < NUM_LEDS; i++) {
     g_ledStage[i]  = {0, 0, 0, 0};
     g_ledActive[i] = {0, 0, 0, 0};
@@ -209,15 +195,6 @@ void processLedCommand(const char* line) {
     g_ledDirty = true;
     Serial.print("OK OFF\r\n");
 
-  } else if (strncmp(line, "THR,", 4) == 0) {
-    if (sscanf(line, "THR,%d", &val) == 1) {
-      g_touchThr = (uint16_t)constrain(val, 1, 2000);
-      touchAttachInterruptArg(TOUCH_PIN, onTouchISR, nullptr, g_touchThr);
-      Serial.printf("OK THR %d\r\n", g_touchThr);
-    } else {
-      Serial.print("ERR format: THR,1-2000\r\n");
-    }
-
   } else if (strncmp(line, "RAINBOW", 7) == 0) {
     g_anim.mode = ANIM_NONE;
     int rbri = 200;
@@ -225,7 +202,7 @@ void processLedCommand(const char* line) {
     rbri = constrain(rbri, 0, 255);
     for (int i = 0; i < NUM_LEDS; i++) {
       uint16_t hue = (uint16_t)((uint32_t)i * 65536 / NUM_LEDS);
-      uint32_t c = strip.gamma32(strip.ColorHSV(hue, 255, 255));
+      uint32_t c = strips[0].gamma32(strips[0].ColorHSV(hue, 255, 255));
       g_ledStage[i] = {(uint8_t)((c >> 16) & 0xFF), (uint8_t)((c >> 8) & 0xFF),
                         (uint8_t)(c & 0xFF), (uint8_t)rbri};
     }
@@ -276,32 +253,35 @@ void processLedCommand(const char* line) {
   } else if (strncmp(line, "SPIN", 4) == 0) {
     AnimState na = {};
     na.maxBri = 200; na.r = 255; na.g = 255; na.b = 255;
-    na.outerDir = 1; na.innerDir = 1;
+    for (int i = 0; i < 4; i++) { na.spinDir[i] = 1; na.spinPos[i] = 0; }
     const char* p = line + 4;
     if (*p == ',') {
       p++;
       if (strncmp(p, "RAINBOW", 7) == 0) {
         na.rainbow = true; p += 7;
-        int od = 0, id = 0, tbri = 200;
-        int n = sscanf(p, ",%d,%d,%d", &od, &id, &tbri);
-        if (n >= 1) na.outerDir = (int8_t)((od == 0) ? 1 : -1);
-        if (n >= 2) na.innerDir = (int8_t)((id == 0) ? 1 : -1);
-        if (n >= 3) na.maxBri  = (uint8_t)constrain(tbri, 0, 255);
+        int d1 = 0, d2 = 0, d3 = 0, d4 = 0, tbri = 200;
+        int n = sscanf(p, ",%d,%d,%d,%d,%d", &d1, &d2, &d3, &d4, &tbri);
+        if (n >= 1) na.spinDir[0] = (int8_t)((d1 == 0) ? 1 : -1);
+        if (n >= 2) na.spinDir[1] = (int8_t)((d2 == 0) ? 1 : -1);
+        if (n >= 3) na.spinDir[2] = (int8_t)((d3 == 0) ? 1 : -1);
+        if (n >= 4) na.spinDir[3] = (int8_t)((d4 == 0) ? 1 : -1);
+        if (n >= 5) na.maxBri   = (uint8_t)constrain(tbri, 0, 255);
       } else {
-        int tr, tg, tb, tod = 0, tid = 0, tbri = 200;
-        int n = sscanf(p, "%d,%d,%d,%d,%d,%d", &tr, &tg, &tb, &tod, &tid, &tbri);
-        if (n < 3) { Serial.print("ERR format: SPIN[,R,G,B[,ODIR,IDIR[,BRI]]|RAINBOW[,ODIR,IDIR[,BRI]]]\r\n"); return; }
+        int tr, tg, tb, d1 = 0, d2 = 0, d3 = 0, d4 = 0, tbri = 200;
+        int n = sscanf(p, "%d,%d,%d,%d,%d,%d,%d,%d", &tr, &tg, &tb, &d1, &d2, &d3, &d4, &tbri);
+        if (n < 3) { Serial.print("ERR format: SPIN[,R,G,B[,D1,D2,D3,D4[,BRI]]|RAINBOW[,D1,D2,D3,D4[,BRI]]]\r\n"); return; }
         na.r = (uint8_t)constrain(tr,0,255); na.g = (uint8_t)constrain(tg,0,255); na.b = (uint8_t)constrain(tb,0,255);
-        if (n >= 4) na.outerDir = (int8_t)((tod == 0) ? 1 : -1);
-        if (n >= 5) na.innerDir = (int8_t)((tid == 0) ? 1 : -1);
-        if (n >= 6) na.maxBri  = (uint8_t)constrain(tbri, 0, 255);
+        if (n >= 4) na.spinDir[0] = (int8_t)((d1 == 0) ? 1 : -1);
+        if (n >= 5) na.spinDir[1] = (int8_t)((d2 == 0) ? 1 : -1);
+        if (n >= 6) na.spinDir[2] = (int8_t)((d3 == 0) ? 1 : -1);
+        if (n >= 7) na.spinDir[3] = (int8_t)((d4 == 0) ? 1 : -1);
+        if (n >= 8) na.maxBri   = (uint8_t)constrain(tbri, 0, 255);
       }
     }
     clearActiveLeds(); na.mode = ANIM_SPIN; g_anim = na;
-    Serial.printf("OK SPIN %s outer=%s inner=%s bri=%d\r\n",
+    Serial.printf("OK SPIN %s dir=[%d,%d,%d,%d] bri=%d\r\n",
       g_anim.rainbow ? "RAINBOW" : "COLOR",
-      g_anim.outerDir > 0 ? "CW" : "CCW",
-      g_anim.innerDir > 0 ? "CW" : "CCW",
+      g_anim.spinDir[0], g_anim.spinDir[1], g_anim.spinDir[2], g_anim.spinDir[3],
       g_anim.maxBri);
 
   } else if (strcmp(line, "STOP") == 0) {
@@ -321,16 +301,15 @@ void processLedCommand(const char* line) {
     }
 
   } else if (strcmp(line, "HELP") == 0) {
-    Serial.print("ALL,R,G,B,BRI                                  - 设置全部 40 颗 LED\r\n");
-    Serial.print("ONE,grp,idx,R,G,B,BRI                          - 设置单颗 LED\r\n");
+    Serial.print("ALL,R,G,B,BRI                                  - 设置全部 108 颗 LED\r\n");
+    Serial.print("ONE,grp,idx,R,G,B,BRI                          - 设置单颗 LED (grp=1-4)\r\n");
     Serial.print("BRI,val                                        - 设置亮度\r\n");
     Serial.print("OFF                                            - 关闭所有 LED\r\n");
-    Serial.print("THR,val                                        - 设置触摸阈值 (1-2000)\r\n");
     Serial.print("RAINBOW[,BRI]                                  - 彩虹渐变\r\n");
     Serial.print("BREATHE[,R,G,B[,BRI]|RAINBOW[,BRI]]           - 呼吸效果\r\n");
-    Serial.print("WAKE[,R,G,B[,BRI]|RAINBOW[,BRI]]              - 唤醒动画（内环→外环）\r\n");
-    Serial.print("SPIN[,R,G,B[,ODIR,IDIR[,BRI]]|RAINBOW[,...]]  - 旋转彗星\r\n");
-    Serial.print("  ODIR/IDIR: 0=CW（默认）, 1=CCW\r\n");
+    Serial.print("WAKE[,R,G,B[,BRI]|RAINBOW[,BRI]]              - 唤醒动画（内圈→外圈）\r\n");
+    Serial.print("SPIN[,R,G,B[,D1..D4[,BRI]]|RAINBOW[,D1..D4[,BRI]]] - 旋转彗星\r\n");
+    Serial.print("  D1..D4: 各圈方向 0=CW, 1=CCW\r\n");
     Serial.print("STOP                                           - 停止动画（状态已保存）\r\n");
     Serial.print("RESUME                                         - 恢复上次动画\r\n");
     Serial.print("HELP                                           - 显示此帮助\r\n");

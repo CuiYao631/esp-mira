@@ -1,44 +1,43 @@
 #ifndef CONFIG_H
 #define CONFIG_H
 
-// ---------- BLE 配置 ----------
-#define DEVICE_PREFIX "Mira"
-#define DEVICE_NAME   DEVICE_PREFIX "-ESP32"
+// ==================== 1. I2C & 触摸芯片引脚配置 ====================
+#define I2C_SDA     4
+#define I2C_SCL     5
+#define BS8112_KEYS 12   // BS8112A-3 共 12 个触摸键
 
-#define SERVICE_UUID        "12345678-1234-1234-1234-123456789abc"
-#define CHARACTERISTIC_UUID "abcd1234-ab12-ab12-ab12-abcdef012345"
+// ==================== 2. WS2812 引脚与各路灯珠数量配置 ====================
+#define RGB1_PIN    3
+#define RGB1_COUNT  36   // 外圈 1
 
-#define LIGHT_VER "0.9.3"
+#define RGB2_PIN    6
+#define RGB2_COUNT  30   // 中外圈 2
 
-// 核心板心跳超时：10秒未收到则判定通讯异常并清空数据
-#define CORE_HEARTBEAT_TIMEOUT_MS 10000UL
+#define RGB3_PIN    7
+#define RGB3_COUNT  24   // 中内圈 3
 
-// ---------- LED 配置 ----------
-#define LED_PIN    15
-#define OUTER_RING 24
-#define INNER_RING 16
-#define NUM_LEDS   (OUTER_RING + INNER_RING)
+#define RGB4_PIN    10
+#define RGB4_COUNT  18   // 内圈 4
 
+#define NUM_STRIPS  4
+#define NUM_LEDS    (RGB1_COUNT + RGB2_COUNT + RGB3_COUNT + RGB4_COUNT)  // 108
+
+// 各路灯带在全局数组中的起始偏移
+#define RGB1_OFFSET 0
+#define RGB2_OFFSET (RGB1_COUNT)
+#define RGB3_OFFSET (RGB1_COUNT + RGB2_COUNT)
+#define RGB4_OFFSET (RGB1_COUNT + RGB2_COUNT + RGB3_COUNT)
+
+// ---------- 动画参数 ----------
 #define BREATHE_SPEED    2        // 每 tick 的相位步进（510 相位循环）
 #define WAKE_FADE_TICKS  80       // 每环淡入所需 tick 数（约 1.6 秒）
 #define SPIN_SPEED_F     0.20f    // 每 tick 移动的环位置数
-#define SPIN_TAIL_LEN    8        // 彗星尾长（保留供参考）
-
-// ---------- 触摸配置 ----------
-#define TOUCH_PIN        14
-#define TOUCH_THRESHOLD  32
-
-// BS8112A-3 I2C 触摸芯片
-#define BS8112_SDA   21
-#define BS8112_SCL   22
-#define BS8112_KEYS  12   // BS8112A-3 共 12 个触摸键
 
 // ---------- 共享数据结构 ----------
-static const uint8_t GROUP_OUTER       = 0;
-static const uint8_t GROUP_INNER       = 1;
-static const uint8_t TOUCH_EVT_PRESS   = 1;
-static const uint8_t TOUCH_EVT_RELEASE = 2;
-static const uint8_t TOUCH_EVT_HOLD    = 3;
+static const uint8_t GROUP_1 = 1;   // RGB1 外圈
+static const uint8_t GROUP_2 = 2;   // RGB2 中外圈
+static const uint8_t GROUP_3 = 3;   // RGB3 中内圈
+static const uint8_t GROUP_4 = 4;   // RGB4 内圈
 
 struct LedPixel {
   uint8_t r, g, b, bri;
@@ -51,12 +50,10 @@ struct AnimState {
   bool     rainbow;
   uint8_t  r, g, b, maxBri;
   int      brPhase;   // BREATHE: 0..509
-  int      wkStep;    // WAKE: 环索引 0..1
+  int      wkStep;    // WAKE: 环索引 0..3（4 圈依次亮起）
   int      wkTimer;   // WAKE: 当前环已过 tick 数
-  float    outerPos;  // SPIN: 外环头部位置（小数）
-  float    innerPos;  // SPIN: 内环头部位置（小数）
-  int8_t   outerDir;  // SPIN: +1=CW, -1=CCW
-  int8_t   innerDir;
+  float    spinPos[4]; // SPIN: 每圈头部位置（小数）
+  int8_t   spinDir[4]; // SPIN: 每圈方向 +1=CW, -1=CCW
 };
 
 #endif // CONFIG_H
