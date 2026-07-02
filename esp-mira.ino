@@ -1,10 +1,7 @@
 #include <Adafruit_NeoPixel.h>
 #include <string.h>
 
-#define LED_PIN    15
-#define TOUCH_PIN  14
-
-#define TOUCH_THRESHOLD  32
+#define LED_PIN    10
 
 #define OUTER_RING 24    
 #define INNER_RING 16    
@@ -19,9 +16,6 @@ Adafruit_NeoPixel strip(NUM_LEDS, LED_PIN, NEO_GRB + NEO_KHZ800);
 
 static const uint8_t GROUP_OUTER = 0;
 static const uint8_t GROUP_INNER = 1;
-static const uint8_t TOUCH_EVT_PRESS   = 1;
-static const uint8_t TOUCH_EVT_RELEASE = 2;
-static const uint8_t TOUCH_EVT_HOLD    = 3;
 
 struct LedPixel {
   uint8_t r;
@@ -45,9 +39,6 @@ struct AnimState {
   int8_t   innerDir;
 };
 
-HardwareSerial SerialData(2);
-
-uint16_t g_touchThr = TOUCH_THRESHOLD;
 LedPixel g_ledStage[NUM_LEDS];
 LedPixel g_ledActive[NUM_LEDS];
 bool      g_ledDirty = true;
@@ -59,19 +50,11 @@ int  mapGroupIndexToLed(int group, int idx);
 void copyStageToActive();
 void clearActiveLeds();
 void renderActiveLeds();
-void sendTouchEvent(uint8_t type, uint16_t raw);
 void processDebugText(const char* line);
 void tickAnimation();
 
-volatile bool     g_touchIRQ    = false;
-static void IRAM_ATTR onTouchISR(void* arg) {
-  g_touchIRQ = true;
-  (void)arg;
-}
-
 void setup() {
   Serial.begin(115200);
-  SerialData.begin(115200, SERIAL_8N1, 16, 17);
   strip.begin();
   strip.setBrightness(255);
   strip.show();
@@ -79,7 +62,6 @@ void setup() {
     g_ledStage[i] = {0, 0, 0, 0};
     g_ledActive[i] = {0, 0, 0, 0};
   }
-  touchAttachInterruptArg(TOUCH_PIN, onTouchISR, nullptr, g_touchThr);
   renderActiveLeds();
   Serial.println("Ready.");
   Serial.println("Commands:");
@@ -99,20 +81,6 @@ void setup() {
 void loop() {
   processSerialDataInput();
   tickAnimation();
-  static bool lastTouched = false;
-  static unsigned long lastHoldReport = 0;
-
-  uint16_t touchVal = (uint16_t)touchRead(TOUCH_PIN);
-  bool isTouched = (touchVal < g_touchThr) || g_touchIRQ;
-  g_touchIRQ = false;
-
-  if (isTouched && !lastTouched) sendTouchEvent(TOUCH_EVT_PRESS, touchVal);
-  if (!isTouched && lastTouched) sendTouchEvent(TOUCH_EVT_RELEASE, touchVal);
-  if (isTouched && millis() - lastHoldReport >= 500) {
-    lastHoldReport = millis();
-    sendTouchEvent(TOUCH_EVT_HOLD, touchVal);
-  }
-  lastTouched = isTouched;
 
   if (g_ledDirty) {
     renderActiveLeds();
@@ -124,23 +92,8 @@ void loop() {
 
 static char g_usbTextBuf[128];
 static uint8_t g_usbTextLen = 0;
-static char g_u2TextBuf[128];
-static uint8_t g_u2TextLen = 0;
 
 void processSerialDataInput() {
-  while (SerialData.available()) {
-    uint8_t b = (uint8_t)SerialData.read();
-    if (b == '\n') {
-      g_u2TextBuf[g_u2TextLen] = '\0';
-      if (g_u2TextLen > 0 && g_u2TextBuf[g_u2TextLen - 1] == '\r')
-        g_u2TextBuf[--g_u2TextLen] = '\0';
-      if (g_u2TextLen > 0) processDebugText(g_u2TextBuf);
-      g_u2TextLen = 0;
-    } else if (b != '\r' && b >= 0x20) {
-      if (g_u2TextLen < sizeof(g_u2TextBuf) - 1)
-        g_u2TextBuf[g_u2TextLen++] = (char)b;
-    }
-  }
   while (Serial.available()) {
     uint8_t b = (uint8_t)Serial.read();
     if (b == '\n') {
@@ -184,18 +137,6 @@ void renderActiveLeds() {
     strip.setPixelColor(i, r, g, b);
   }
   strip.show();
-}
-
-void sendTouchEvent(uint8_t type, uint16_t raw) {
-  const char* evtName;
-  if (type == TOUCH_EVT_PRESS)        evtName = "PRESS";
-  else if (type == TOUCH_EVT_RELEASE) evtName = "RELEASE";
-  else                                evtName = "HOLD";
-
-  char textBuf[32];
-  snprintf(textBuf, sizeof(textBuf), "TOUCH,%s,%u\r\n", evtName, raw);
-  Serial.print(textBuf);
-  SerialData.print(textBuf);
 }
 
 // ---------------------------------------------------------------------------
@@ -372,15 +313,6 @@ void processDebugText(const char* line) {
     g_ledDirty = true;
     Serial.print("OK OFF\r\n");
 
-  } else if (strncmp(line, "THR,", 4) == 0) {
-    if (sscanf(line, "THR,%d", &val) == 1) {
-      g_touchThr = (uint16_t)constrain(val, 1, 2000);
-      touchAttachInterruptArg(TOUCH_PIN, onTouchISR, nullptr, g_touchThr);
-      Serial.printf("OK THR %d\r\n", g_touchThr);
-    } else {
-      Serial.print("ERR format: THR,1-2000\r\n");
-    }
-
   } else if (strncmp(line, "RAINBOW", 7) == 0) {
     g_anim.mode = ANIM_NONE;
     int rbri = 200;
@@ -489,7 +421,6 @@ void processDebugText(const char* line) {
     Serial.print("ONE,grp,idx,R,G,B,BRI   - set one LED and apply\r\n");
     Serial.print("BRI,val                 - set all LEDs brightness\r\n");
     Serial.print("OFF                     - turn off all LEDs\r\n");
-    Serial.print("THR,val                 - set touch threshold (1-2000)\r\n");
     Serial.print("RAINBOW[,BRI]           - rainbow gradient (default BRI=200)\r\n");
     Serial.print("BREATHE[,R,G,B[,BRI]|RAINBOW[,BRI]] - breathing effect\r\n");
     Serial.print("WAKE[,R,G,B[,BRI]|RAINBOW[,BRI]]    - wake-up animation (inner->outer)\r\n");
