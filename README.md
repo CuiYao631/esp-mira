@@ -138,7 +138,7 @@ BS8112A 芯片仅监控 KEY 10，串口自动上报：
 ### 成功响应
 
 | 命令 | 响应示例 |
-|------|------|
+/Users/xiaocui/Downloads/mira-board-device-code-20260618|------|------|
 | ALL | `OK ALL 255,0,0,200` |
 | ONE | `OK ONE grp=0 idx=12 0,255,0,200` |
 | BRI | `OK BRI 128` |
